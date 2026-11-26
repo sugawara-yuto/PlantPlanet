@@ -45,6 +45,19 @@ namespace Direct3D
 	int						screenHeight_ = 0;
 	bool					isFullScreen_ = false;
 	HWND 					hWnd_ = nullptr;
+	//
+	const int SHADOW_MAP_SIZE = 2048;
+	ID3D11Texture2D* pShadowMapTexture = nullptr;
+	ID3D11DepthStencilView* pShadowMapDSV = nullptr;
+	ID3D11ShaderResourceView* pShadowMapSRV = nullptr;
+	ID3D11SamplerState* pShadowSampler = nullptr;
+	ID3D11DepthStencilState* pShadowDepthState = nullptr;
+	bool isShadowPass_ = false;
+	ID3D11RenderTargetView* pSavedRTV = nullptr;
+	ID3D11DepthStencilView* pSavedDSV = nullptr;
+	ID3D11DepthStencilState* pSavedDepthState = nullptr;
+	UINT savedStencilRef = 0;
+	D3D11_VIEWPORT savedViewport = {};
 
 	//イージング関数
 	map<string, function<double(double)>> EaseFunc{
@@ -182,6 +195,9 @@ namespace Direct3D
 		//各パターンのシェーダーセット準備
 		InitShaderBundle();
 		Direct3D::SetShader(Direct3D::SHADER_3D);
+
+		//シャドウマップ準備
+		InitShadowMap();
 
 		//深度ステンシルビューの作成
 		D3D11_TEXTURE2D_DESC descDepth;
@@ -501,6 +517,26 @@ namespace Direct3D
 			hlsl_layout = temp;
 			compile_fxc(L"Shader/Area.hlsl", Direct3D::SHADER_AREA, sizeof(temp) / sizeof(D3D11_INPUT_ELEMENT_DESC));
 		}
+
+		//SHADOW（シャドウマップへの深度書き込み用）
+		{
+			r_desc.CullMode = D3D11_CULL_BACK;
+			r_desc.FillMode = D3D11_FILL_SOLID;
+			r_desc.FrontCounterClockwise = FALSE;
+			r_desc.DepthBias = 0;
+			r_desc.SlopeScaledDepthBias = 1.0f;
+			r_desc.DepthBiasClamp = 0.0f;
+
+			D3D11_INPUT_ELEMENT_DESC temp[] =
+			{
+			{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, vectorSize * 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+			{ "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, vectorSize * 1, D3D11_INPUT_PER_VERTEX_DATA, 0},
+			{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, vectorSize * 2, D3D11_INPUT_PER_VERTEX_DATA, 0},
+			};
+
+			hlsl_layout = temp;
+			compile_fxc(L"Shader/ShadowDepth.hlsl", Direct3D::SHADER_SHADOW, sizeof(temp) / sizeof(D3D11_INPUT_ELEMENT_DESC));
+		}
 	}
 
 	
@@ -556,6 +592,11 @@ namespace Direct3D
 	void Release()
 	{
 		SAFE_RELEASE(pDepthStencil);
+		SAFE_RELEASE(pShadowMapTexture);
+		SAFE_RELEASE(pShadowMapDSV);
+		SAFE_RELEASE(pShadowMapSRV);
+		SAFE_RELEASE(pShadowSampler);
+		SAFE_RELEASE(pShadowDepthState);
 		SAFE_RELEASE(pDepthStencilView);
 		SAFE_RELEASE(pRenderTargetView_);
 		SAFE_RELEASE(pSwapChain_);
@@ -693,6 +734,121 @@ namespace Direct3D
 		return shaderName[index];
 	}
 
+	//シャドウマップ初期化
+	void InitShadowMap()
+	{
+		D3D11_TEXTURE2D_DESC desc = {};
+		desc.Width = SHADOW_MAP_SIZE;
+		desc.Height = SHADOW_MAP_SIZE;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R32_TYPELESS;
+		desc.SampleDesc.Count = 1;
+		desc.SampleDesc.Quality = 0;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+		desc.CPUAccessFlags = 0;
+		desc.MiscFlags = 0;
+		pDevice_->CreateTexture2D(&desc, NULL, &pShadowMapTexture);
+
+		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+		dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+		dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+		dsvDesc.Texture2D.MipSlice = 0;
+		pDevice_->CreateDepthStencilView(pShadowMapTexture, &dsvDesc, &pShadowMapDSV);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+		pDevice_->CreateShaderResourceView(pShadowMapTexture, &srvDesc, &pShadowMapSRV);
+
+		D3D11_SAMPLER_DESC sampDesc = {};
+		sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+		sampDesc.MinLOD = 0;
+		sampDesc.MaxLOD = 0;
+		pDevice_->CreateSamplerState(&sampDesc, &pShadowSampler);
+
+		D3D11_DEPTH_STENCIL_DESC dsDesc = {};
+		dsDesc.DepthEnable = true;
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		dsDesc.DepthFunc = D3D11_COMPARISON_LESS;
+		dsDesc.StencilEnable = false;
+		pDevice_->CreateDepthStencilState(&dsDesc, &pShadowDepthState);
+	}
+
+	//ライト視点のビュー・プロジェクション合成行列
+	XMMATRIX GetLightViewProjMatrix()
+	{
+		XMVECTOR lightDir = XMLoadFloat4(&Light::sunLightDir);
+		lightDir = XMVector3Normalize(lightDir);
+
+		XMVECTOR lightPos = -lightDir * 80.0f;
+		XMVECTOR target = XMVectorZero();
+
+		XMVECTOR up = (fabsf(XMVectorGetY(lightDir)) > 0.99f)
+			? XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+			: XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+
+		XMMATRIX view = XMMatrixLookAtLH(lightPos, target, up);
+		XMMATRIX proj = XMMatrixOrthographicLH(100.0f, 100.0f, 1.0f, 200.0f);
+		return view * proj;
+	}
+
+	//シャドウパス開始
+	void BeginShadowPass()
+	{
+		pContext_->OMGetRenderTargets(1, &pSavedRTV, &pSavedDSV);
+		pContext_->OMGetDepthStencilState(&pSavedDepthState, &savedStencilRef);
+		UINT numViewports = 1;
+		pContext_->RSGetViewports(&numViewports, &savedViewport);
+
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		pContext_->PSSetShaderResources(1, 1, &nullSRV);
+
+		pContext_->OMSetRenderTargets(0, nullptr, pShadowMapDSV);
+		pContext_->ClearDepthStencilView(pShadowMapDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
+
+		D3D11_VIEWPORT vp = {};
+		vp.Width = (float)SHADOW_MAP_SIZE;
+		vp.Height = (float)SHADOW_MAP_SIZE;
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		vp.TopLeftX = 0;
+		vp.TopLeftY = 0;
+		pContext_->RSSetViewports(1, &vp);
+
+		pContext_->OMSetDepthStencilState(pShadowDepthState, 0);
+
+		isShadowPass_ = true;
+	}
+
+	//シャドウパス終了
+	void EndShadowPass()
+	{
+		isShadowPass_ = false;
+
+		pContext_->OMSetRenderTargets(1, &pSavedRTV, pSavedDSV);
+		pContext_->OMSetDepthStencilState(pSavedDepthState, savedStencilRef);
+		pContext_->RSSetViewports(1, &savedViewport);
+		SAFE_RELEASE(pSavedRTV);
+		SAFE_RELEASE(pSavedDSV);
+		SAFE_RELEASE(pSavedDepthState);
+
+		pContext_->PSSetShaderResources(1, 1, &pShadowMapSRV);
+		pContext_->PSSetSamplers(1, 1, &pShadowSampler);
+	}
+
+	//シャドウパス中かどうか
+	bool IsShadowPass()
+	{
+		return isShadowPass_;
+	}
 }
 
 HRESULT HLSLInclude::DefaultInclude::Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes)

@@ -51,6 +51,7 @@ namespace Direct3D
 		SHADER_BUTTON_SELECT,
 		SHADER_BUTTON_NOTSELECT,
 		SHADER_AREA,
+		SHADER_SHADOW,
 		SHADER_MAX
 	};	//3タイプ（3D用、2D用、当たり判定枠表示用）
 	struct SHADER_BUNDLE
@@ -99,6 +100,21 @@ namespace Direct3D
 
 	//シェーダー関連で必要なセット準備
 	void InitShaderBundle();
+
+	//シャドウマップ初期化
+	void InitShadowMap();
+
+	//シャドウパス開始（ライト視点での描画に切り替え）
+	void BeginShadowPass();
+
+	//シャドウパス終了（通常描画に戻し、シャドウマップをt1にセット）
+	void EndShadowPass();
+
+	//シャドウパス中かどうか
+	bool IsShadowPass();
+
+	//ライト視点のビュー・プロジェクション合成行列
+	XMMATRIX GetLightViewProjMatrix();
 
 	//今から描画するShaderBundleを設定
 	//引数：type	SHADER_3D, SHADER_2D, SHADER_UNLITのどれか

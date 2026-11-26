@@ -449,6 +449,12 @@ void FbxParts::CalculateAnimBone(FbxTime& const time)
 //描画
 void FbxParts::Draw(Transform& transform)
 {
+	//シャドウパス中は深度書き込み専用シェーダーに切り替える
+	if (Direct3D::IsShadowPass())
+	{
+		Direct3D::SetShader(Direct3D::SHADER_SHADOW);
+	}
+
 	//今から描画する頂点情報をシェーダに伝える
 	UINT stride = sizeof(VERTEX);
 	UINT offset = 0;
@@ -475,7 +481,20 @@ void FbxParts::Draw(Transform& transform)
 		D3D11_MAPPED_SUBRESOURCE pdata;
 		CONSTANT_BUFFER cb;
 
-		cb.worldVewProj = XMMatrixTranspose(transform.GetWorldMatrix() * Camera::GetViewMatrix() * Camera::GetProjectionMatrix());						// リソースへ送る値をセット
+		//ライト視点での変換行列（影用）
+		XMMATRIX lightWVP = transform.GetWorldMatrix() * Direct3D::GetLightViewProjMatrix();
+		cb.lightWVP = XMMatrixTranspose(lightWVP);
+
+		//シャドウパス中はWVP自体もライト視点にする（深度を正しく書くため）
+		if (Direct3D::IsShadowPass())
+		{
+			cb.worldVewProj = XMMatrixTranspose(lightWVP);
+		}
+		else
+		{
+			cb.worldVewProj = XMMatrixTranspose(transform.GetWorldMatrix() * Camera::GetViewMatrix() * Camera::GetProjectionMatrix());
+		}
+
 		cb.world = XMMatrixTranspose(transform.GetWorldMatrix());
 		cb.normalTrans = XMMatrixTranspose(transform.matRotate_ * XMMatrixInverse(nullptr, transform.matScale_));
 		cb.ambient = pMaterial_[i].ambient;

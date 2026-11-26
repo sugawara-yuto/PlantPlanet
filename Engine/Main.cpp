@@ -207,6 +207,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 				//このフレームの描画開始
 				Direct3D::BeginDraw();
 
+				//ライト視点でシーンを描き、シャドウマップを作成
+				Direct3D::BeginShadowPass();
+				pRootObject->DrawSub();
+				Direct3D::EndShadowPass();
+
 				//全オブジェクトを描画
 				//ルートオブジェクトのDrawを呼んだあと、自動的に子、孫のUpdateが呼ばれる
 				pRootObject->DrawSub();

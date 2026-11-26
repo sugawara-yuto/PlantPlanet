@@ -5,14 +5,28 @@
 //───────────────────────────────────────
 Texture2D		g_texture: register(t0);	//テクスチャー
 SamplerState	g_sampler : register(s0);	//サンプラー
+Texture2D g_shadowMap : register(t1);		//シャドウマップ
+SamplerState g_shadowSampler : register(s1);//シャドウマップ用サンプラー
+
+//影判定用（VS_OUTにshadowPosを追加したもの）
+struct VS_OUT_SHADOW
+{
+    float4 pos : SV_POSITION;
+    float4 normal : TEXCOORD2;
+    float2 uv : TEXCOORD0;
+    float4 eye : TEXCOORD1;
+    float4 globalPos : TEXCOORD3;
+    float4 localPos : TEXCOORD4;
+    float4 shadowPos : TEXCOORD5;
+};
 
 //───────────────────────────────────────
 // 頂点シェーダ
 //───────────────────────────────────────
-VS_OUT VS(float4 pos : POSITION, float4 Normal : NORMAL, float2 Uv : TEXCOORD)
+VS_OUT_SHADOW VS(float4 pos : POSITION, float4 Normal : NORMAL, float2 Uv : TEXCOORD)
 {
 	//ピクセルシェーダーへ渡す情報
-	VS_OUT outData;
+    VS_OUT_SHADOW outData;
 
 	//ローカル座標に、ワールド・ビュー・プロジェクション行列をかけて
 	//スクリーン座標に変換し、ピクセルシェーダーへ
@@ -31,6 +45,7 @@ VS_OUT VS(float4 pos : POSITION, float4 Normal : NORMAL, float2 Uv : TEXCOORD)
 
     outData.globalPos = worldPos;
     outData.localPos = pos;
+    outData.shadowPos = mul(pos, g_matLightWVP);
    // outData.pos = mul(outData.pos,g_matShadow); //影行列を使って影の位置を計算
 	//まとめて出力
 	return outData;
@@ -39,7 +54,7 @@ VS_OUT VS(float4 pos : POSITION, float4 Normal : NORMAL, float2 Uv : TEXCOORD)
 //───────────────────────────────────────
 // ピクセルシェーダ
 //───────────────────────────────────────
-float4 PS(VS_OUT inData) : SV_Target
+float4 PS(VS_OUT_SHADOW inData) : SV_Target
 {
     float4 diffuse;
 	//テクスチャ有無
@@ -99,6 +114,22 @@ float4 PS(VS_OUT inData) : SV_Target
 	
     //float4 col = float4(diffuse.rgb * th + shade.rgb, 1);//beautiful shader
     float4 col = float4(diffuse.rgb * th.rgb,1);
+	
+	//シャドウマップで影判定
+    float shadow = 1.0f;
+    float3 shadowProj = inData.shadowPos.xyz / inData.shadowPos.w;
+    float2 shadowUV = float2(shadowProj.x * 0.5f + 0.5f, -shadowProj.y * 0.5f + 0.5f);
+    if (shadowProj.x >= -1.0f && shadowProj.x <= 1.0f &&
+    shadowProj.y >= -1.0f && shadowProj.y <= 1.0f &&
+    shadowProj.z >= 0.0f && shadowProj.z <= 1.0f)
+    {
+        float shadowDepth = g_shadowMap.Sample(g_shadowSampler, shadowUV).r;
+        if (shadowProj.z > shadowDepth + 0.002f)
+        {
+            shadow = 0.5f; //影の中は半分の明るさ（調整用）
+        }
+    }
+    col.rgb *= shadow;
 	
     return float4(col);
 }

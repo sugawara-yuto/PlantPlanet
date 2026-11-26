@@ -42,6 +42,7 @@ class FbxParts
 		BOOL	 isTexture;		//テクスチャの有無
 		float	 val0;
 		float	 val1;
+		XMMATRIX lightWVP; //ワールド、ライトビュー、ライトプロジェクション行列の合成（影用）
 	};
 
 	// マテリアル情報（質感の情報）
